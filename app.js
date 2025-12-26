@@ -150,11 +150,27 @@ function nmeaToDecimal(value, hemisphere, isLat) {
 }
 
 function extractTrainId(parts) {
-  // I dina rader finns ofta "... 1416.trains.se ..." eller "... 62010.trains.se ..."
-  // Vi letar efter \d+.trains.se i resten av strängen.
-  const tail = parts.slice(10).join(",");
-  const m = tail.match(/(\d+)\.trains\.se/i);
-  return m ? m[1] : "unknown";
+  // Sök i HELA raden efter "<digits>.trains.se"
+  const tail = parts.join(",");
+
+  // Vanligast: 1416.trains.se eller 62010.trains.se
+  let m = tail.match(/(?:^|,)\s*(\d+)\.trains\.se\b/i);
+  if (m) return m[1];
+
+  // Ibland kan det ligga utan kommatecken före
+  m = tail.match(/(\d+)\.trains\.se\b/i);
+  if (m) return m[1];
+
+  // Fallback: public.trains.se@YYYY-MM-DD / internal.trains.se@YYYY-MM-DD
+  m = tail.match(/\b(public|internal)\.trains\.se@(\d{4}-\d{2}-\d{2})\b/i);
+  if (m) return `${m[1]}@${m[2]}`;
+
+  // Sista utväg: hash av lat/lon/time (minskar teleport men inte perfekt)
+  // (delar av RMC: tid + lat + lon)
+  const time = parts[1] || "";
+  const lat = parts[3] || "";
+  const lon = parts[5] || "";
+  return `unk-${time}-${lat}-${lon}`;
 }
 
 // XSS-säker popup
