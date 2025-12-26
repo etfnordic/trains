@@ -1,0 +1,3 @@
+html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+header { padding: 10px 12px; border-bottom: 1px solid #ddd; }
+#map { height: calc(100vh - 86px); width: 100%; }
