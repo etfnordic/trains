@@ -1,4 +1,4 @@
-const ws = new WebSocket("wss://etfnordic.workers.dev/ws?v=1");
+const ws = new WebSocket("wss://train.etfnordic.workers.dev/ws?v=1");
 
 ws.onopen = () => console.log("Connected to proxy");
 ws.onmessage = (ev) => {
