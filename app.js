@@ -1,237 +1,208 @@
-// === Konfiguration ===
-const WS_URL = "wss://train.etfnordic.workers.dev/ws?v=1";
-const STALE_MS = 2 * 60 * 1000; // ta bort tåg efter 2 min utan uppdatering
-const CLEANUP_EVERY_MS = 30 * 1000;
+// ====== KONFIG ======
+const WORKER_URL = "https://train.etfnordic.workers.dev"; // din worker
+const REFRESH_MS = 15000; // 15s
 
-// === UI helpers ===
-const wsDot = document.getElementById("wsDot");
-const wsText = document.getElementById("wsText");
-const countText = document.getElementById("countText");
+// ====== UI refs ======
+const lastUpdateEl = document.getElementById("lastUpdate");
+const countEl = document.getElementById("count");
+const errorBox = document.getElementById("errorBox");
 
-function setWsStatus(state, msg) {
-  wsDot.classList.remove("ok", "bad");
-  if (state === "ok") wsDot.classList.add("ok");
-  if (state === "bad") wsDot.classList.add("bad");
-  wsText.textContent = msg;
-}
+// ====== Leaflet map ======
+const map = L.map("map", { zoomControl: true }).setView([62.0, 15.0], 5);
 
-function setCount(n) {
-  countText.textContent = `${n} tåg`;
-}
-
-// === Leaflet karta ===
-const map = L.map("map", {
-  zoomControl: true,
-  preferCanvas: true,
-}).setView([59.33, 18.06], 6); // Sverige
-
+// OpenStreetMap tiles
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
-  attribution: '&copy; OpenStreetMap',
+  attribution: '&copy; OpenStreetMap-bidragsgivare',
 }).addTo(map);
 
-// === Marker-hantering ===
-const markers = new Map();   // id -> marker
-const lastSeen = new Map();  // id -> timestamp (ms)
+// Layer för alla tågmarkörer
+const trainsLayer = L.layerGroup().addTo(map);
 
-function makeArrowIcon(bearingDeg = 0) {
-  // Vi bygger en enkel triangel som en DivIcon.
-  // CSS-triangel pekar uppåt (0deg = norr). Vi roterar med bearing.
+// Håll koll på markörer per tåg så vi kan uppdatera istället för att rita om allt
+const markersByKey = new Map();
+
+// ====== Hjälpfunktioner ======
+function setError(msg) {
+  if (!msg) {
+    errorBox.hidden = true;
+    errorBox.textContent = "";
+    return;
+  }
+  errorBox.hidden = false;
+  errorBox.textContent = msg;
+}
+
+function formatTime(iso) {
+  try {
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat("sv-SE", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(d);
+  } catch {
+    return iso ?? "—";
+  }
+}
+
+// Trafikverket skickar Position.WGS84 som string typ:
+// "POINT (18.05854634121404 59.33383190994468)"
+function parseWgs84Point(pointStr) {
+  if (!pointStr || typeof pointStr !== "string") return null;
+  const m = pointStr.match(/POINT\s*\(\s*([-\d.]+)\s+([-\d.]+)\s*\)/i);
+  if (!m) return null;
+  const lon = Number(m[1]);
+  const lat = Number(m[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon };
+}
+
+// Skapa en pil som SVG. Vi roterar den via CSS transform.
+function createArrowDivIcon(bearingDeg = 0) {
+  // Normalisera
   const rot = Number.isFinite(bearingDeg) ? bearingDeg : 0;
 
-  const html = `
-    <div class="train-arrow" style="transform: rotate(${rot}deg);">
-      <div class="tri"></div>
-    </div>
-  `;
+  const svg = `
+<svg width="26" height="26" viewBox="0 0 26 26" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M13 2 L22 22 L13 18 L4 22 Z" fill="white" fill-opacity="0.92" stroke="black" stroke-opacity="0.25" stroke-width="1"/>
+</svg>`.trim();
 
   return L.divIcon({
-    className: "train-icon",
-    html,
-    iconSize: [20, 20],
-    iconAnchor: [10, 10],
+    className: "train-arrow",
+    html: `<div class="arrow" style="transform: rotate(${rot}deg)">${svg}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+    popupAnchor: [0, -12],
   });
 }
 
-function upsertTrain(t) {
-  lastSeen.set(t.id, t.ts);
+// Unik nyckel per tåg: använd operational number + departure date (stabilt)
+function makeTrainKey(tp) {
+  const op = tp?.Train?.OperationalTrainNumber ?? "unknown";
+  const dep = tp?.Train?.OperationalTrainDepartureDate ?? "unknown";
+  return `${op}_${dep}`;
+}
 
-  const popupHtml = `
-    <div>
-      <b>Tåg ${escapeHtml(t.id)}</b><br>
-      Lat/Lon: ${t.lat.toFixed(5)}, ${t.lon.toFixed(5)}<br>
-      Fart: ${t.speedKmh.toFixed(1)} km/h<br>
-      Kurs: ${t.course ?? "?"}°
+function popupHtml(tp) {
+  const train = tp?.Train ?? {};
+  const status = tp?.Status ?? {};
+  const pos = tp?.Position ?? {};
+
+  const opNo = train.OperationalTrainNumber ?? "—";
+  const advNo = train.AdvertisedTrainNumber ?? "—";
+  const depDate = train.OperationalTrainDepartureDate ?? "—";
+  const time = tp?.TimeStamp ?? "—";
+  const modified = tp?.ModifiedTime ?? "—";
+
+  const bearing = status.Bearing ?? "—";
+  const speed = status.Speed ?? "—";
+  const active = status.Active ?? "—";
+  const delayed = tp?.Delayed ?? "—";
+
+  // Visa också rå WGS84 ifall man vill felsöka
+  const wgs84 = pos?.WGS84 ?? "—";
+
+  return `
+    <div style="min-width:220px">
+      <div style="font-weight:700; font-size:14px; margin-bottom:6px;">
+        Tåg ${advNo} <span style="color:#9ca3af; font-weight:600;">(op: ${opNo})</span>
+      </div>
+
+      <div style="font-size:13px; line-height:1.35;">
+        <div><b>Aktiv:</b> ${active}</div>
+        <div><b>Försenad:</b> ${delayed}</div>
+        <div><b>Riktning (bearing):</b> ${bearing}</div>
+        <div><b>Hastighet:</b> ${speed}</div>
+        <div><b>Timestamp:</b> ${formatTime(time)}</div>
+        <div><b>Modified:</b> ${formatTime(modified)}</div>
+        <div style="margin-top:6px; color:#9ca3af;"><b>Avgångsdatum:</b> ${depDate}</div>
+        <div style="margin-top:6px; color:#9ca3af; word-break:break-word;"><b>WGS84:</b> ${wgs84}</div>
+      </div>
     </div>
   `;
-
-  let m = markers.get(t.id);
-  if (!m) {
-    m = L.marker([t.lat, t.lon], {
-      icon: makeArrowIcon(t.course ?? 0),
-      keyboard: false,
-    }).addTo(map);
-
-    m.bindPopup(popupHtml);
-    markers.set(t.id, m);
-  } else {
-    m.setLatLng([t.lat, t.lon]);
-    m.setIcon(makeArrowIcon(t.course ?? 0));
-    m.setPopupContent(popupHtml);
-  }
-
-  setCount(markers.size);
 }
 
-function cleanupStale() {
-  const now = Date.now();
-  for (const [id, ts] of lastSeen.entries()) {
-    if (now - ts > STALE_MS) {
-      const m = markers.get(id);
-      if (m) map.removeLayer(m);
-      markers.delete(id);
-      lastSeen.delete(id);
-    }
-  }
-  setCount(markers.size);
-}
-
-setInterval(cleanupStale, CLEANUP_EVERY_MS);
-
-// === NMEA RMC parsing ===
-function parseRmc(line) {
-  if (!line || line[0] !== "$") return null;
-  if (!(line.startsWith("$GPRMC") || line.startsWith("$GNRMC"))) return null;
-
-  const noChecksum = line.split("*")[0];
-  const parts = noChecksum.split(",");
-
-  // status A = valid
-  const status = parts[2];
-  if (status !== "A") return null;
-
-  const latRaw = parts[3];
-  const latHem = parts[4];
-  const lonRaw = parts[5];
-  const lonHem = parts[6];
-
-  const speedKnots = parseFloat(parts[7] || "0");
-  const course = parseFloat(parts[8] || "NaN");
-
-  const lat = nmeaToDecimal(latRaw, latHem, true);
-  const lon = nmeaToDecimal(lonRaw, lonHem, false);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-
-  const id = extractTrainId(parts);
-
-  return {
-    id,
-    lat,
-    lon,
-    speedKmh: (Number.isFinite(speedKnots) ? speedKnots : 0) * 1.852,
-    course: Number.isFinite(course) ? course : null,
-    raw: line,
-    ts: Date.now(),
-  };
-}
-
-function nmeaToDecimal(value, hemisphere, isLat) {
-  if (!value) return NaN;
-  const degLen = isLat ? 2 : 3;
-
-  const deg = parseInt(value.slice(0, degLen), 10);
-  const min = parseFloat(value.slice(degLen));
-
-  if (!Number.isFinite(deg) || !Number.isFinite(min)) return NaN;
-
-  let dec = deg + (min / 60);
-  if (hemisphere === "S" || hemisphere === "W") dec *= -1;
-  return dec;
-}
-
-function extractTrainId(parts) {
-  // Sök i HELA raden efter "<digits>.trains.se"
-  const tail = parts.join(",");
-
-  // Vanligast: 1416.trains.se eller 62010.trains.se
-  let m = tail.match(/(?:^|,)\s*(\d+)\.trains\.se\b/i);
-  if (m) return m[1];
-
-  // Ibland kan det ligga utan kommatecken före
-  m = tail.match(/(\d+)\.trains\.se\b/i);
-  if (m) return m[1];
-
-  // Fallback: public.trains.se@YYYY-MM-DD / internal.trains.se@YYYY-MM-DD
-  m = tail.match(/\b(public|internal)\.trains\.se@(\d{4}-\d{2}-\d{2})\b/i);
-  if (m) return `${m[1]}@${m[2]}`;
-
-  // Sista utväg: hash av lat/lon/time (minskar teleport men inte perfekt)
-  // (delar av RMC: tid + lat + lon)
-  const time = parts[1] || "";
-  const lat = parts[3] || "";
-  const lon = parts[5] || "";
-  return `unk-${time}-${lat}-${lon}`;
-}
-
-// XSS-säker popup
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-// === WebSocket connect + reconnect ===
-let ws = null;
-let reconnectTimer = null;
-
-function connect() {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  setWsStatus("warn", "Ansluter…");
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    setWsStatus("ok", "Live");
-  };
-
-  ws.onmessage = (e) => {
-    const line = String(e.data).trim();
-    const t = parseRmc(line);
-    if (!t) return;
-    upsertTrain(t);
-  };
-
-  ws.onerror = () => {
-    // onclose kommer strax efter
-    setWsStatus("bad", "Fel");
-  };
-
-  ws.onclose = (e) => {
-    setWsStatus("bad", `Stängd (${e.code})`);
-    // reconnect
-    reconnectTimer = setTimeout(connect, 1500);
-  };
-}
-
-connect();
-
-// === Styles för pilar (injekteras här så du slipper extra CSS-klassfil) ===
+// ====== CSS för pilen (injiceras så du bara behöver 3 filer) ======
 const style = document.createElement("style");
 style.textContent = `
-  .train-icon { background: transparent; border: none; }
-  .train-arrow { width: 20px; height: 20px; display: grid; place-items: center; }
-  .train-arrow .tri {
-    width: 0; height: 0;
-    border-left: 7px solid transparent;
-    border-right: 7px solid transparent;
-    border-bottom: 14px solid rgba(231,238,247,0.92);
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
-  }
+.train-arrow { background: transparent; border: none; }
+.train-arrow .arrow { width: 26px; height: 26px; transform-origin: 50% 50%; }
+.train-arrow svg { filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35)); }
 `;
 document.head.appendChild(style);
+
+// ====== Datahämtning + uppdatering ======
+async function fetchTrainPositions() {
+  setError("");
+
+  const res = await fetch(WORKER_URL, { method: "GET" });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Worker HTTP ${res.status}\n${txt}`);
+  }
+  const json = await res.json();
+
+  // Struktur: RESPONSE.RESULT[0].TrainPosition
+  const positions = json?.RESPONSE?.RESULT?.[0]?.TrainPosition ?? [];
+  return positions;
+}
+
+function upsertMarkers(trainPositions) {
+  const seenKeys = new Set();
+
+  for (const tp of trainPositions) {
+    const key = makeTrainKey(tp);
+    seenKeys.add(key);
+
+    const point = parseWgs84Point(tp?.Position?.WGS84);
+    if (!point) continue;
+
+    const bearing = tp?.Status?.Bearing ?? 0;
+
+    const existing = markersByKey.get(key);
+    if (existing) {
+      existing.setLatLng([point.lat, point.lon]);
+      existing.setIcon(createArrowDivIcon(bearing));
+      existing._tp = tp; // spara senaste data
+      // Om popup är öppen: uppdatera innehåll live
+      if (existing.isPopupOpen()) existing.setPopupContent(popupHtml(tp));
+    } else {
+      const marker = L.marker([point.lat, point.lon], {
+        icon: createArrowDivIcon(bearing),
+        riseOnHover: true,
+      });
+
+      marker._tp = tp;
+      marker.bindPopup(popupHtml(tp), { closeButton: true });
+
+      marker.addTo(trainsLayer);
+      markersByKey.set(key, marker);
+    }
+  }
+
+  // ta bort markörer som inte längre finns i svaret
+  for (const [key, marker] of markersByKey.entries()) {
+    if (!seenKeys.has(key)) {
+      trainsLayer.removeLayer(marker);
+      markersByKey.delete(key);
+    }
+  }
+
+  countEl.textContent = String(markersByKey.size);
+}
+
+async function refresh() {
+  try {
+    const tps = await fetchTrainPositions();
+    upsertMarkers(tps);
+
+    lastUpdateEl.textContent = `Uppdaterad ${formatTime(new Date().toISOString())}`;
+  } catch (err) {
+    setError(String(err?.message ?? err));
+    console.error(err);
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
