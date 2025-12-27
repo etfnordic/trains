@@ -75,6 +75,7 @@ main { height: 100%; }
   white-space: pre-wrap;
 }
 
+/* Leaflet popup */
 .leaflet-popup-content-wrapper {
   background: rgba(17, 24, 39, 0.95);
   color: var(--text);
