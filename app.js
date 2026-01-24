@@ -174,7 +174,14 @@ function upsertTrain(t) {
 async function fetchTrains() {
   const res = await fetch(WORKER_URL, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+
+  const data = await res.json();
+
+  // Din worker: { meta: {...}, trains: [...] }
+  if (Array.isArray(data)) return data;              // om du någon gång byter format
+  if (Array.isArray(data.trains)) return data.trains;
+
+  return [];
 }
 
 async function refresh() {
