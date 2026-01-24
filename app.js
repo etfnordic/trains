@@ -1,13 +1,9 @@
-// ==========================
-// KONFIG
-// ==========================
 const WORKER_URL = "https://trains.etfnordic.workers.dev/trains";
 const REFRESH_MS = 5000;
 
-// Färg per product
 const PRODUCT_COLORS = {
-  "Pågatågen": "#A855F7", // lila
-  "Västtågen": "#2563EB", // blå
+  "Pågatågen": "#A855F7",
+  "Västtågen": "#2563EB",
   "Krösatågen": "#F59E0B",
   "TiB": "#10B981",
   "SJ InterCity": "#0EA5E9",
@@ -18,9 +14,7 @@ const PRODUCT_COLORS = {
 };
 const DEFAULT_COLOR = "#64748B";
 
-// ==========================
-// KARTA
-// ==========================
+// ===== KARTA =====
 const map = L.map("map", { zoomControl: true }).setView([59.33, 18.06], 6);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -28,27 +22,19 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap",
 }).addTo(map);
 
-// ==========================
-// STATE
-// ==========================
-const markers = new Map(); // key -> marker
-const trainDataByKey = new Map(); // key -> latest train object
+// ===== STATE =====
+const markers = new Map();         // key -> marker
+const trainDataByKey = new Map();  // key -> train
 let pinnedKey = null;
+
 let filterQuery = "";
 
-// Klick på kartan släpper pin direkt
+// Släpp pin på kartklick (snabbt)
 map.on("click", () => {
-  if (pinnedKey) {
-    const prev = markers.get(pinnedKey);
-    if (prev) setSelectedGlow(prev, false);
-  }
-  pinnedKey = null;
-  markers.forEach((m) => m.closeTooltip());
+  unpinCurrent();
 });
 
-// ==========================
-// SÖK
-// ==========================
+// ===== SÖK =====
 const searchEl = document.getElementById("search");
 const clearBtn = document.getElementById("clearSearch");
 
@@ -58,27 +44,37 @@ function normalize(s) {
 
 function matchesFilter(t) {
   if (!filterQuery) return true;
-  const hay = [
-    t.trainNo,
-    t.operator,
-    t.to,
-    t.product,
-  ]
-    .map(normalize)
-    .join(" ");
+  const hay = `${t.trainNo} ${t.operator} ${t.to}`.toLowerCase();
   return hay.includes(filterQuery);
 }
 
-function applyFilter() {
+function applyFilterAndMaybeZoom() {
+  // 1) visa/dölj markers
+  let matchKeys = [];
   for (const [key, marker] of markers.entries()) {
     const t = trainDataByKey.get(key);
     const ok = t ? matchesFilter(t) : true;
 
     if (ok) {
       if (!map.hasLayer(marker)) marker.addTo(map);
+      matchKeys.push(key);
     } else {
       if (map.hasLayer(marker)) map.removeLayer(marker);
       if (pinnedKey === key) pinnedKey = null;
+    }
+  }
+
+  // 2) auto-zoom om exakt 1 match
+  if (filterQuery && matchKeys.length === 1) {
+    const key = matchKeys[0];
+    const marker = markers.get(key);
+    if (marker) {
+      // passa in lite tajt, men utan att bli för nära
+      const ll = marker.getLatLng();
+      map.setView(ll, Math.max(map.getZoom(), 10), { animate: true });
+
+      // visa chip även om inget är pinnat
+      marker.openTooltip();
     }
   }
 }
@@ -95,34 +91,34 @@ searchEl.addEventListener(
   "input",
   debounce(() => {
     filterQuery = normalize(searchEl.value);
-    applyFilter();
+    applyFilterAndMaybeZoom();
   }, 120),
 );
 
 clearBtn.addEventListener("click", () => {
   searchEl.value = "";
   filterQuery = "";
-  applyFilter();
+  applyFilterAndMaybeZoom();
   searchEl.focus();
 });
 
-// ==========================
-// HELPERS
-// ==========================
+// ===== HELPERS =====
 function colorForProduct(product) {
   return PRODUCT_COLORS[product] ?? DEFAULT_COLOR;
 }
 
-// Worker-bearing = grader från nord (0=N, 90=E, 180=S, 270=W)
-// Vår SVG “grund” pekar åt höger (öst), så vi roterar med (bearing - 90).
+// Bearing offset: DU SA “mitt emellan nu och innan”.
+// Innan: 0 offset (pekade höger). Sen: -90 (blev fel åt andra hållet).
+// “Mittemellan” = -45. Du kan fintrimma här om du vill (+/- 10).
+const BEARING_OFFSET_DEG = -45;
+
 function makeTrainDivIcon({ color, bearing }) {
-  const rot = (bearing ?? 0) - 90;
+  const rot = (bearing ?? 0) + BEARING_OFFSET_DEG;
   const html = `
     <div class="train-icon" style="transform: rotate(${rot}deg);">
       ${makeArrowSvg(color)}
     </div>
   `;
-
   return L.divIcon({
     className: "",
     html,
@@ -131,7 +127,7 @@ function makeTrainDivIcon({ color, bearing }) {
   });
 }
 
-// Fylld pil (SL-känsla)
+// Fylld pil
 function makeArrowSvg(color) {
   return `
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -142,13 +138,12 @@ function makeArrowSvg(color) {
 }
 
 function formatChipText(t) {
-  const base = `${t.product} ${t.trainNo} \u2192 ${t.to}`; // →
+  const base = `${t.product} ${t.trainNo} \u2192 ${t.to}`;
   if (t.speed === null || t.speed === undefined) return base;
-  return `${base} \u00B7 ${t.speed} km/h`; // ·
+  return `${base} \u00B7 ${t.speed} km/h`;
 }
 
-// Logo från /logos baserat på product (du lägger själv filer)
-// Ex: /logos/krosatagen.png  /logos/vasttagen.png
+// logos: baserat på product
 function safeFileName(s) {
   return String(s ?? "")
     .toLowerCase()
@@ -160,8 +155,7 @@ function safeFileName(s) {
 }
 
 function productLogoPath(product) {
-  const name = safeFileName(product);
-  return `./logos/${name}.png`; // byt till .svg om du kör svg
+  return `./logos/${safeFileName(product)}.png`;
 }
 
 function chipHtml(t, color) {
@@ -174,88 +168,110 @@ function chipHtml(t, color) {
   `;
 }
 
-function setSelectedGlow(marker, isSelected) {
-  const el = marker.getElement();
-  if (!el) return;
-  el.classList.toggle("train-selected", isSelected);
-}
-
-// Smooth animation
+// ===== Smooth move =====
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
-function animateMarkerTo(marker, toLatLng, durationMs = 900) {
+function animateMarkerTo(marker, toLatLng, durationMs = 850) {
   const from = marker.getLatLng();
   const to = L.latLng(toLatLng[0], toLatLng[1]);
   const start = performance.now();
 
   function step(now) {
     const t = Math.min(1, (now - start) / durationMs);
-    const lat = lerp(from.lat, to.lat, t);
-    const lng = lerp(from.lng, to.lng, t);
-    marker.setLatLng([lat, lng]);
+    marker.setLatLng([lerp(from.lat, to.lat, t), lerp(from.lng, to.lng, t)]);
     if (t < 1) requestAnimationFrame(step);
   }
-
   requestAnimationFrame(step);
 }
 
-// Binder tooltip + “instant pin”
-function bindChip(marker, t, color, key) {
+// ===== PIN/UNPIN utan lagg =====
+//
+// Vi gör “pin” genom att:
+// - stänga tidigare pinnad tooltip
+// - toggla CSS glow via marker.getElement().classList
+// - göra tooltip “permanent” endast för pinnad marker
+//
+// Rebind sker bara för 2 markers (förra + nya), det håller det snabbt.
+function setGlow(marker, on) {
+  const el = marker.getElement();
+  if (!el) return;
+  el.classList.toggle("train-selected", on);
+}
+
+function bindTooltip(marker, t, color, permanent) {
+  marker.unbindTooltip();
   marker.bindTooltip(chipHtml(t, color), {
     direction: "top",
     offset: [0, -18],
     opacity: 1,
     className: "train-chip",
-    permanent: false,
+    permanent,
     interactive: true,
-  });
-
-  marker.on("mouseover", () => {
-    if (pinnedKey === null || pinnedKey === key) marker.openTooltip();
-  });
-
-  marker.on("mouseout", () => {
-    if (pinnedKey !== key) marker.closeTooltip();
-  });
-
-  marker.on("click", (e) => {
-    // Viktigt: stoppa kartklick -> annars “släpps” den direkt
-    L.DomEvent.stop(e);
-
-    // Släpp förra direkt + ta bort glow
-    if (pinnedKey && pinnedKey !== key) {
-      const prev = markers.get(pinnedKey);
-      if (prev) {
-        prev.closeTooltip();
-        setSelectedGlow(prev, false);
-      }
-    }
-
-    pinnedKey = key;
-    setSelectedGlow(marker, true);
-    marker.openTooltip(); // direkt
   });
 }
 
-// ==========================
-// DATA: FETCH
-// ==========================
+function unpinCurrent() {
+  if (!pinnedKey) return;
+  const prev = markers.get(pinnedKey);
+  const t = trainDataByKey.get(pinnedKey);
+  if (prev && t) {
+    setGlow(prev, false);
+    // gör den non-permanent igen
+    bindTooltip(prev, t, colorForProduct(t.product), false);
+    prev.closeTooltip();
+  }
+  pinnedKey = null;
+}
+
+function pinMarker(key) {
+  if (pinnedKey === key) return; // redan pinnad
+
+  // släpp tidigare direkt
+  unpinCurrent();
+
+  const marker = markers.get(key);
+  const t = trainDataByKey.get(key);
+  if (!marker || !t) return;
+
+  pinnedKey = key;
+  setGlow(marker, true);
+
+  // gör tooltip permanent direkt (känns “instant”)
+  bindTooltip(marker, t, colorForProduct(t.product), true);
+  marker.openTooltip();
+}
+
+// Hover-beteende: vi låter Leaflet visa tooltip (non-permanent),
+// men om den är pinnad så är den redan permanent.
+function attachHoverAndClick(marker, key) {
+  marker.on("mouseover", () => {
+    if (!pinnedKey) marker.openTooltip();
+  });
+
+  marker.on("mouseout", () => {
+    if (!pinnedKey) marker.closeTooltip();
+  });
+
+  marker.on("click", (e) => {
+    L.DomEvent.stop(e);
+    // Pin direkt utan extra logik som triggar re-render
+    pinMarker(key);
+  });
+}
+
+// ===== FETCH =====
 async function fetchTrains() {
   const res = await fetch(WORKER_URL, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
-
-  // Worker: { meta, trains }
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.trains)) return data.trains;
   return [];
 }
 
-// ==========================
-// UPSERT MARKER
-// ==========================
+// ===== UPSERT =====
 function upsertTrain(t) {
   const key = `${t.depDate}_${t.trainNo}`;
   trainDataByKey.set(key, t);
@@ -264,36 +280,40 @@ function upsertTrain(t) {
   const opacity = t.canceled ? 0.35 : 1;
 
   if (!markers.has(key)) {
-    const icon = makeTrainDivIcon({ color, bearing: t.bearing });
-    const marker = L.marker([t.lat, t.lon], { icon, opacity }).addTo(map);
+    const marker = L.marker([t.lat, t.lon], {
+      icon: makeTrainDivIcon({ color, bearing: t.bearing }),
+      opacity,
+    }).addTo(map);
 
-    bindChip(marker, t, color, key);
+    // init tooltip non-permanent
+    bindTooltip(marker, t, color, false);
+    attachHoverAndClick(marker, key);
+
     markers.set(key, marker);
   } else {
     const marker = markers.get(key);
 
-    // animation istället för ryck
-    animateMarkerTo(marker, [t.lat, t.lon], 900);
+    // position animation
+    animateMarkerTo(marker, [t.lat, t.lon], 850);
 
-    marker.setOpacity(opacity);
+    // icon update (bearing + color) — sker bara vid refresh, inte vid click
     marker.setIcon(makeTrainDivIcon({ color, bearing: t.bearing }));
-    marker.setTooltipContent(chipHtml(t, color));
+    marker.setOpacity(opacity);
 
-    // håll glow + tooltip om pinnad
-    if (pinnedKey === key) {
-      setSelectedGlow(marker, true);
+    // uppdatera tooltip-content, behåll permanent om pinnad
+    const isPinned = pinnedKey === key;
+    bindTooltip(marker, t, color, isPinned);
+
+    if (isPinned) {
+      setGlow(marker, true);
       marker.openTooltip();
-    } else {
-      setSelectedGlow(marker, false);
     }
   }
 
   return key;
 }
 
-// ==========================
-// REFRESH LOOP
-// ==========================
+// ===== LOOP =====
 async function refresh() {
   try {
     const trains = await fetchTrains();
@@ -302,12 +322,11 @@ async function refresh() {
     for (const t of trains) {
       if (!t || !t.trainNo) continue;
       if (typeof t.lat !== "number" || typeof t.lon !== "number") continue;
-
       const key = upsertTrain(t);
       seen.add(key);
     }
 
-    // remove old
+    // remove gamla
     for (const [key, marker] of markers.entries()) {
       if (!seen.has(key)) {
         if (pinnedKey === key) pinnedKey = null;
@@ -317,8 +336,7 @@ async function refresh() {
       }
     }
 
-    // re-apply search filter
-    applyFilter();
+    applyFilterAndMaybeZoom();
   } catch (err) {
     console.error("Kunde inte uppdatera tåg:", err);
   }
