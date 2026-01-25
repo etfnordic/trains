@@ -83,7 +83,7 @@ body {
   gap: 10px;
   padding: 9px 12px;
   border-radius: 14px;
-  color: #fff;
+  color: var(--chip-text, #fff);
   font:
     600 13px/1.2 system-ui,
     -apple-system,
@@ -93,6 +93,14 @@ body {
   white-space: nowrap;
   box-shadow: 0 12px 22px rgba(0, 0, 0, 0.28);
   border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+/* Extra tydlig markering på pinnat chip */
+.leaflet-tooltip.train-chip.pinned .chip {
+  box-shadow:
+    0 18px 30px rgba(0, 0, 0, 0.42),
+    0 0 0 2px rgba(255, 255, 255, 0.35),
+    0 0 18px rgba(255, 255, 255, 0.18);
 }
 
 /* LOGGA: ingen “box” bakom */
