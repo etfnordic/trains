@@ -291,19 +291,19 @@ function chipHtml(t, color) {
 
 // ===== Label icon (SL-style) =====
 function makeLabelDivIcon(t, color, pinned) {
-  // Vi använder samma className som tidigare tooltips hade, så din CSS fortsätter gälla.
-  // Inline transform placerar chipet ovanför punkten (utan Leaflet tooltip-system).
   const wrapper = `
-    <div style="transform: translate(-50%, calc(-100% - ${LABEL_OFFSET_Y_PX}px)); pointer-events: none;">
+    <div class="trainLabelPos">
       ${chipHtml(t, color)}
     </div>
   `;
+
   return L.divIcon({
     className: pinned ? "train-chip pinned" : "train-chip",
     html: wrapper,
-    // Leaflet kräver ofta iconSize, men vi låter innehållet styra och sätter minimal.
+    // Leaflet behöver en "låtsas-storlek" för att kunna ankra snyggt.
     iconSize: [1, 1],
-    iconAnchor: [0, 0],
+    // Ankaret i mitten av "punkten" -> då hamnar labeln rakt över tåget
+    iconAnchor: [0.5, 0.5],
   });
 }
 
