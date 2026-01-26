@@ -69,7 +69,11 @@ body {
     drop-shadow(0 10px 18px rgba(0, 0, 0, 0.28));
 }
 
-/* CHIP */
+/* =========================
+   CHIP / LABEL (divIcon)
+   ========================= */
+
+/* Bas: chip wrapper ska aldrig få “tooltip-bubbel” styling från Leaflet */
 .train-chip {
   border: none;
   padding: 0;
@@ -77,33 +81,78 @@ body {
   box-shadow: none;
 }
 
+/* Leaflet använder olika klasser beroende på om det är tooltip eller divIcon */
+.leaflet-tooltip.train-chip,
+.leaflet-marker-icon.train-chip {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Ingen “triangel” */
+.leaflet-tooltip.train-chip:before,
+.leaflet-marker-icon.train-chip:before {
+  display: none;
+}
+
+/* Tooltip hade margin-top; divIcon behöver inte men skadar inte tooltip-läget */
+.leaflet-tooltip.train-chip {
+  margin-top: -6px;
+}
+
+/* Se till att labeln inte kan fånga musen (SL-style) */
+.leaflet-marker-icon.train-chip,
+.train-chip {
+  pointer-events: none;
+}
+
+/* Själva chipet */
 .train-chip .chip {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
   border-radius: 14px;
+
+  /* textfärgen sätts inline i HTML (bestTextColor),
+     men behåll fallback */
   color: var(--chip-text, #fff);
+
   font:
     600 13px/1.2 system-ui,
     -apple-system,
     Segoe UI,
     Roboto,
-    sans-serif; /* mindre fet */
+    sans-serif;
+
   white-space: nowrap;
-  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.28);
+
   border: 1px solid rgba(255, 255, 255, 0.18);
+
+  /* Grundskugga */
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.28);
 }
 
-/* Extra tydlig markering på pinnat chip */
-.leaflet-tooltip.train-chip.pinned .chip {
+/* Lättare hover-look (om du vill differentiera hover senare)
+   - (just nu används inte en separat hover-klass i JS, men den finns redo) */
+.train-chip.hover .chip,
+.train-chip.is-hover .chip {
+  box-shadow: 0 16px 26px rgba(0, 0, 0, 0.32);
+}
+
+/* Pinned: SL-inspirerad “lyft + halo + glow”
+   - gäller både tooltip (om du någonsin använder det igen) och divIcon */
+.train-chip.pinned .chip,
+.leaflet-tooltip.train-chip.pinned .chip,
+.leaflet-marker-icon.train-chip.pinned .chip {
   box-shadow:
-    0 18px 30px rgba(0, 0, 0, 0.42),
-    0 0 0 2px rgba(255, 255, 255, 0.35),
-    0 0 18px rgba(255, 255, 255, 0.18);
+    0 18px 34px rgba(0, 0, 0, 0.48),     /* lyft */
+    0 0 0 3px rgba(255, 255, 255, 0.32), /* halo */
+    0 0 18px rgba(255, 255, 255, 0.22);  /* glow */
 }
 
-/* LOGGA: ingen “box” bakom */
+/* LOGGA */
 .train-chip .logo {
   width: 22px;
   height: 22px;
@@ -113,10 +162,18 @@ body {
   object-fit: contain;
 }
 
-.leaflet-tooltip.train-chip {
-  margin-top: -6px;
+/* --- User location  --- */
+.userLocDot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #1a73e8;           /* Blå */
+  border: 3px solid #ffffff;     /* vit ring */
+  box-shadow:
+    0 2px 8px rgba(0,0,0,0.25),
+    0 0 0 1px rgba(26,115,232,0.35);
 }
 
-.leaflet-tooltip.train-chip:before {
-  display: none;
+.userLocWrap {
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
 }
