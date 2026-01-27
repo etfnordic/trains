@@ -567,8 +567,8 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-// ===== BETTER SPEED ESTIMATION + CAP 205 =====
-const SPEED_CAP = 205;
+// ===== BETTER SPEED ESTIMATION + CAP 200 =====
+const SPEED_CAP = 200;
 
 const MAX_SAMPLES = 10; // lite fler så median blir stabil
 const WINDOW_MS = 90_000; // analysera senaste 90s
@@ -721,7 +721,7 @@ function estimateSpeedWithBearingAlphaBeta(key, lat, lon, bearingDeg, tsMs) {
   const instKmh = instMps * 3.6;
 
   // Outlier gates
-  const MAX_KMH_GATE = 350; // gate (display cap är 205)
+  const MAX_KMH_GATE = 350; // gate (display cap är 200)
   const MIN_DIST_M = 6; // mindre än detta är ofta brus vid korta dt
   const ok = instKmh >= 0 && instKmh <= MAX_KMH_GATE && (distM >= MIN_DIST_M || dt >= 8);
 
@@ -799,7 +799,7 @@ function normalizeTrain(tIn) {
     pushSample(key, { lat: t.lat, lon: t.lon, tsMs });
   }
 
-  // clamp även “riktig” speed (så du aldrig visar >205)
+  // clamp även “riktig” speed (så du aldrig visar >200)
   if (t.speed !== null && t.speed !== undefined && Number.isFinite(Number(t.speed))) {
     t.speed = Math.min(Number(t.speed), SPEED_CAP);
   }
