@@ -21,7 +21,7 @@ const PRODUCT_COLORS = {
   "Norrtåg": "#07235C",
   "Östgötapendel": "#F9B026",
   "Tågab": "#895129",
-  "Öresundståg": "#494949",
+  "Öresundståg": "#5E5E5E",
   "VR Snabbtåg": "#0EA5E9",
   "Mälartåg": "#0049A6",
 };
