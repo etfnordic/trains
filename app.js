@@ -1,5 +1,5 @@
 const WORKER_URL = "https://trains.etfnordic.workers.dev/trains";
-const REFRESH_MS = 2500;
+const REFRESH_MS = 5500;
 
 // Visuellt: dimma inställda tåg (sätt true om du vill ha 0.35 igen)
 const SHOW_CANCELED_DIM = false;
@@ -179,6 +179,9 @@ const LABEL_OFFSET_Y_PX = 18;
 const lastSamplesByKey = new Map(); // key -> [{ lat, lon, tsMs }, ...]
 const lastEstSpeedByKey = new Map(); // key -> { speed, tsMs }
 
+// Bearing-baserat speed state (alpha-beta) per tåg
+const speedStateByKey = new Map(); // key -> { vMps, aMps2, lastTsMs, lastLat, lastLon }
+
 // Cache: senaste kända product/to per tågnr (för att undvika null-flimmer)
 const lastKnownByTrainNo = new Map(); // trainNo -> { product, to, tsMs }
 const LAST_KNOWN_TTL_MS = 30 * 60 * 1000; // 30 min
@@ -211,7 +214,7 @@ function normalize(s) {
 
 function matchesFilter(t) {
   if (!filterQuery) return true;
-  const hay = `${t.trainNo} ${t.product}`.toLowerCase();
+  const hay = `${t.trainNo} ${t.product ?? ""} ${t.to ?? ""}`.toLowerCase();
   return hay.includes(filterQuery);
 }
 
@@ -649,6 +652,102 @@ function smoothEstimate(key, rawEst, tsMs) {
   return rawEst;
 }
 
+// --- Bearing speed helpers (lokal meter-approx + along-track projektion) ---
+function latLonToLocalMeters(lat, lon, refLat, refLon) {
+  // Equirectangular approximation around ref point (meters)
+  const R = 6371000; // meters
+  const toRad = (d) => (d * Math.PI) / 180;
+
+  const phi = toRad(lat);
+  const phi0 = toRad(refLat);
+  const dPhi = toRad(lat - refLat);
+  const dLam = toRad(lon - refLon);
+
+  const x = R * dLam * Math.cos((phi + phi0) / 2); // east (m)
+  const y = R * dPhi; // north (m)
+  return { x, y };
+}
+
+function estimateSpeedWithBearingAlphaBeta(key, lat, lon, bearingDeg, tsMs) {
+  if (!Number.isFinite(tsMs)) return null;
+  if (typeof lat !== "number" || typeof lon !== "number") return null;
+  if (!Number.isFinite(bearingDeg)) return null;
+
+  const st = speedStateByKey.get(key);
+  if (!st) {
+    speedStateByKey.set(key, {
+      vMps: 0,
+      aMps2: 0,
+      lastTsMs: tsMs,
+      lastLat: lat,
+      lastLon: lon,
+    });
+    return null; // behöver minst 2 punkter
+  }
+
+  if (tsMs <= st.lastTsMs) return null;
+
+  const dt = (tsMs - st.lastTsMs) / 1000; // seconds
+  // Gate dt
+  if (dt < 0.5 || dt > 120) {
+    st.lastTsMs = tsMs;
+    st.lastLat = lat;
+    st.lastLon = lon;
+    return null;
+  }
+
+  const m = latLonToLocalMeters(lat, lon, st.lastLat, st.lastLon);
+  const dx = m.x;
+  const dy = m.y;
+
+  const distM = Math.hypot(dx, dy);
+
+  // Bearing 0=N, 90=E. x=east, y=north => unit=(sin, cos)
+  const th = (bearingDeg * Math.PI) / 180;
+  const ux = Math.sin(th);
+  const uy = Math.cos(th);
+
+  // Along-track (projektion längs bearing) -> mindre sidjitter
+  let along = dx * ux + dy * uy;
+
+  // Om bearing och verklig rörelse pekar "bakåt" kan along bli negativ (kurvor/jitter).
+  // För speed vill vi inte få negativa spike: clampa upp till 0 om svagt negativt.
+  if (along < 0) {
+    // tillåt inte att små fel drar ner speed:
+    if (Math.abs(along) < 0.25 * distM) along = 0;
+  }
+
+  const instMps = along / dt;
+  const instKmh = instMps * 3.6;
+
+  // Outlier gates
+  const MAX_KMH_GATE = 350; // gate (display cap är 205)
+  const MIN_DIST_M = 6; // mindre än detta är ofta brus vid korta dt
+  const ok = instKmh >= 0 && instKmh <= MAX_KMH_GATE && (distM >= MIN_DIST_M || dt >= 8);
+
+  // Uppdatera last oavsett, så vi inte “fastnar”
+  st.lastTsMs = tsMs;
+  st.lastLat = lat;
+  st.lastLon = lon;
+
+  if (!ok) return null;
+
+  // 1D alpha-beta filter på speed (m/s) + acceleration (m/s^2)
+  // Snabb respons men stabilt
+  const alpha = 0.45;
+  const beta = 0.12;
+
+  const vPred = st.vMps + st.aMps2 * dt;
+  const r = instMps - vPred;
+
+  st.vMps = vPred + alpha * r;
+  st.aMps2 = st.aMps2 + (beta * r) / dt;
+
+  // Clamp till 0..SPEED_CAP
+  const vKmh = Math.max(0, st.vMps * 3.6);
+  return Math.min(SPEED_CAP, vKmh);
+}
+
 function normalizeTrain(tIn) {
   const t = { ...tIn };
 
@@ -705,10 +804,22 @@ function normalizeTrain(tIn) {
     t.speed = Math.min(Number(t.speed), SPEED_CAP);
   }
 
-  // Estimera om null
+  // Estimera om null (bearing först, annars fallback till din tidigare median-metod)
   t._speedEstimated = false;
   if (t.speed === null || t.speed === undefined) {
-    if (Number.isFinite(tsMs)) {
+    let est = null;
+
+    if (Number.isFinite(tsMs) && typeof t.lat === "number" && typeof t.lon === "number") {
+      est = estimateSpeedWithBearingAlphaBeta(key, t.lat, t.lon, Number(t.bearing), tsMs);
+      if (est !== null && Number.isFinite(est)) {
+        t.speed = Math.min(SPEED_CAP, Math.round(est));
+        t._speedEstimated = true;
+        lastEstSpeedByKey.set(key, { speed: t.speed, tsMs });
+      }
+    }
+
+    // Fallback till befintlig metod om bearing-estimat inte finns ännu
+    if (!t._speedEstimated && Number.isFinite(tsMs)) {
       const raw = estimateSpeedFromSamples(key, { lat: t.lat, lon: t.lon, tsMs });
       if (raw !== null) {
         const smoothed = smoothEstimate(key, raw, tsMs);
@@ -799,6 +910,7 @@ async function refresh() {
         trainDataByKey.delete(key);
         lastSamplesByKey.delete(key);
         lastEstSpeedByKey.delete(key);
+        speedStateByKey.delete(key);
       }
     }
 
