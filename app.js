@@ -5,7 +5,7 @@ const PRODUCT_COLORS = {
   "Pågatågen": "#6460AD",
   "Västtågen": "#007EB1",
   "Krösatågen": "#FCC907",
-  "Tåg i Bergslagen": "#C0311A",
+  "Tåg i Bergslagen": "#851401",
   "Värmlandstrafik": "#F9B000",
   "Arlanda Express": "#FEF380",
   "SJ Nattåg": "#0D1117",
@@ -19,13 +19,13 @@ const PRODUCT_COLORS = {
   "Snälltåget": "#51FF00",
   "SL Pendeltåg": "#2870F0",
   "Norrtåg": "#07235C",
-  "Östgötapendel": "#F9B026",
+  "Östgötapendel": "#E30713",
   "Tågab": "#895129",
-  "Öresundståg": "#5E5E5E",
-  "VR Snabbtåg": "#0EA5E9",
+  "Öresundståg": "#64748B",
+  "VR Snabbtåg": "#00B451",
   "Mälartåg": "#0049A6",
 };
-const DEFAULT_COLOR = "#64748B";
+const DEFAULT_COLOR = "#FFFFFF";
 
 // ===== KARTA =====
 const map = L.map("map", { zoomControl: true }).setView([59.33, 18.06], 6);
