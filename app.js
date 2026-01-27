@@ -1,5 +1,5 @@
 const WORKER_URL = "https://trains.etfnordic.workers.dev/trains";
-const REFRESH_MS = 5500;
+const REFRESH_MS = 5000;
 
 // Visuellt: dimma inställda tåg (sätt true om du vill ha 0.35 igen)
 const SHOW_CANCELED_DIM = false;
