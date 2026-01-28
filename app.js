@@ -183,6 +183,12 @@ const lastEstSpeedByKey = new Map(); // key -> { speed, tsMs }
 // Bearing-baserat speed state (alpha-beta) per tåg
 const speedStateByKey = new Map(); // key -> { vMps, aMps2, lastTsMs, lastLat, lastLon }
 
+// Stop-detektor state per tåg (låser speed=0 vid station)
+const stopStateByKey = new Map(); // key -> { stopped: bool, sinceTsMs: number }
+
+// Extra stabilisering av visad speed (minskar fladder)
+const displaySpeedStateByKey = new Map(); // key -> { speed: number, tsMs: number }
+
 // Cache: senaste kända product/to per tågnr (för att undvika null-flimmer)
 const lastKnownByTrainNo = new Map(); // trainNo -> { product, to, tsMs }
 const LAST_KNOWN_TTL_MS = 30 * 60 * 1000; // 30 min
@@ -653,6 +659,105 @@ function smoothEstimate(key, rawEst, tsMs) {
   return rawEst;
 }
 
+// ===== STOP DETECTION (låser speed=0 vid station) =====
+const STOP_WINDOW_MS = 25_000;
+const STOP_ENTER_MS = 18_000;
+const STOP_RADIUS_M = 14;
+const MOVE_EXIT_M = 28;
+const MOVE_STEP_M = 20;
+
+function distM(lat1, lon1, lat2, lon2) {
+  return haversineKm(lat1, lon1, lat2, lon2) * 1000;
+}
+
+function getRecentSamples(key, tsMs, windowMs) {
+  const arr = lastSamplesByKey.get(key);
+  if (!arr || arr.length < 2) return [];
+  const cut = tsMs - windowMs;
+  return arr.filter((s) => s.tsMs >= cut && s.tsMs <= tsMs);
+}
+
+function updateStoppedState(key, lat, lon, tsMs) {
+  const pts = getRecentSamples(key, tsMs, STOP_WINDOW_MS);
+  if (pts.length < 3) return false;
+
+  const last = pts[pts.length - 1];
+  let maxD = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const d = distM(last.lat, last.lon, p.lat, p.lon);
+    if (d > maxD) maxD = d;
+  }
+
+  const prev = pts[pts.length - 2];
+  const stepD = distM(prev.lat, prev.lon, last.lat, last.lon);
+
+  const st = stopStateByKey.get(key) ?? { stopped: false, sinceTsMs: tsMs };
+
+  if (st.stopped) {
+    if (maxD > MOVE_EXIT_M || stepD > MOVE_STEP_M) {
+      st.stopped = false;
+      st.sinceTsMs = tsMs;
+    }
+  } else {
+    if (maxD <= STOP_RADIUS_M) {
+      if (!Number.isFinite(st.sinceTsMs)) st.sinceTsMs = tsMs;
+      if (tsMs - st.sinceTsMs >= STOP_ENTER_MS) {
+        st.stopped = true;
+      }
+    } else {
+      st.sinceTsMs = tsMs;
+    }
+  }
+
+  stopStateByKey.set(key, st);
+  return st.stopped;
+}
+
+function resetSpeedFilterState(key) {
+  const st = speedStateByKey.get(key);
+  if (st) {
+    st.vMps = 0;
+    st.aMps2 = 0;
+  }
+}
+
+// ===== EXTRA SPEED STABILIZATION (minskar fladder) =====
+const SPEED_SMOOTH_MAX_DELTA_KMH_PER_S = 4.0; // rate limit (km/h per sekund)
+const SPEED_SMOOTH_ALPHA_EST = 0.22; // stabilare för estimerad speed
+const SPEED_SMOOTH_ALPHA_REAL = 0.30; // lite stabilisering även för "riktig" speed
+
+function smoothDisplayedSpeed(key, rawSpeedKmh, tsMs, isEstimated) {
+  if (!Number.isFinite(rawSpeedKmh)) return rawSpeedKmh;
+  if (!Number.isFinite(tsMs)) return rawSpeedKmh;
+
+  const prev = displaySpeedStateByKey.get(key);
+  if (!prev || !Number.isFinite(prev.speed) || !Number.isFinite(prev.tsMs)) {
+    displaySpeedStateByKey.set(key, { speed: rawSpeedKmh, tsMs });
+    return rawSpeedKmh;
+  }
+
+  const dtS = Math.max(0.001, (tsMs - prev.tsMs) / 1000);
+  if (dtS > 180) {
+    // för lång paus -> hoppa till nytt värde
+    displaySpeedStateByKey.set(key, { speed: rawSpeedKmh, tsMs });
+    return rawSpeedKmh;
+  }
+
+  // 1) rate-limit
+  const maxDelta = SPEED_SMOOTH_MAX_DELTA_KMH_PER_S * dtS;
+  const delta = rawSpeedKmh - prev.speed;
+  const limited = prev.speed + Math.max(-maxDelta, Math.min(maxDelta, delta));
+
+  // 2) EWMA smoothing
+  const alpha = isEstimated ? SPEED_SMOOTH_ALPHA_EST : SPEED_SMOOTH_ALPHA_REAL;
+  const smoothed = (1 - alpha) * prev.speed + alpha * limited;
+
+  const out = Math.min(SPEED_CAP, Math.max(0, smoothed));
+  displaySpeedStateByKey.set(key, { speed: out, tsMs });
+  return out;
+}
+
 // --- Bearing speed helpers (lokal meter-approx + along-track projektion) ---
 function latLonToLocalMeters(lat, lon, refLat, refLon) {
   // Equirectangular approximation around ref point (meters)
@@ -701,7 +806,7 @@ function estimateSpeedWithBearingAlphaBeta(key, lat, lon, bearingDeg, tsMs) {
   const dx = m.x;
   const dy = m.y;
 
-  const distM = Math.hypot(dx, dy);
+  const distM_ = Math.hypot(dx, dy);
 
   // Bearing 0=N, 90=E. x=east, y=north => unit=(sin, cos)
   const th = (bearingDeg * Math.PI) / 180;
@@ -720,7 +825,7 @@ function estimateSpeedWithBearingAlphaBeta(key, lat, lon, bearingDeg, tsMs) {
   // Outlier gates
   const MAX_KMH_GATE = 350; // gate (display cap är 200)
   const MIN_DIST_M = 12; // FIX 2: ignorera små hopp (brus) mer aggressivt
-  const ok = instKmh >= 0 && instKmh <= MAX_KMH_GATE && (distM >= MIN_DIST_M || dt >= 8);
+  const ok = instKmh >= 0 && instKmh <= MAX_KMH_GATE && (distM_ >= MIN_DIST_M || dt >= 8);
 
   // Uppdatera last oavsett, så vi inte “fastnar”
   st.lastTsMs = tsMs;
@@ -806,6 +911,16 @@ function normalizeTrain(tIn) {
     pushSample(key, { lat: t.lat, lon: t.lon, tsMs });
   }
 
+  // Stop-detektor: lås speed=0 när tåget står still (motverkar GPS-jitter-spikar)
+  let isStopped = false;
+  if (Number.isFinite(tsMs) && typeof t.lat === "number" && typeof t.lon === "number") {
+    isStopped = updateStoppedState(key, t.lat, t.lon, tsMs);
+    if (isStopped) {
+      resetSpeedFilterState(key);
+      displaySpeedStateByKey.set(key, { speed: 0, tsMs });
+    }
+  }
+
   // clamp även “riktig” speed (så du aldrig visar >200)
   if (t.speed !== null && t.speed !== undefined && Number.isFinite(Number(t.speed))) {
     t.speed = Math.min(Number(t.speed), SPEED_CAP);
@@ -814,6 +929,14 @@ function normalizeTrain(tIn) {
   // Estimera om null (bearing först, annars fallback till din tidigare median-metod)
   t._speedEstimated = false;
   if (t.speed === null || t.speed === undefined) {
+    // Om vi bedömer att tåget står still -> visa 0 direkt
+    if (isStopped && Number.isFinite(tsMs)) {
+      t.speed = 0;
+      t._speedEstimated = true;
+      lastEstSpeedByKey.set(key, { speed: t.speed, tsMs });
+      return t;
+    }
+
     let est = null;
 
     if (Number.isFinite(tsMs) && typeof t.lat === "number" && typeof t.lon === "number") {
@@ -841,6 +964,13 @@ function normalizeTrain(tIn) {
         }
       }
     }
+  }
+
+  // Extra stabilisering: minska fladdrig speed (gäller både riktig och estimerad)
+  if (t.speed !== null && t.speed !== undefined && Number.isFinite(Number(t.speed)) && Number.isFinite(tsMs)) {
+    const raw = Math.min(SPEED_CAP, Math.max(0, Number(t.speed)));
+    const sm = smoothDisplayedSpeed(key, raw, tsMs, !!t._speedEstimated);
+    t.speed = Math.round(sm);
   }
 
   return t;
@@ -918,6 +1048,8 @@ async function refresh() {
         lastSamplesByKey.delete(key);
         lastEstSpeedByKey.delete(key);
         speedStateByKey.delete(key);
+        stopStateByKey.delete(key);
+        displaySpeedStateByKey.delete(key);
       }
     }
 
