@@ -9,7 +9,7 @@ const PRODUCT_COLORS = {
   "Pågatågen Exp": "#6460AD",
   "Västtågen": "#007EB1",
   "Krösatågen": "#FCF807",
-  "Tåg i Bergslagen": "#851401",
+  "Tåg i Bergslagen": "#9A2715",
   "Värmlandstrafik": "#F9B000",
   "Arlanda Express": "#FEF380",
   "SJ Nattåg": "#000000",
