@@ -179,6 +179,7 @@ body {
   box-shadow:
     0 0 0 4px rgba(255, 255, 255, 0.18),
     0 0 26px rgba(255, 255, 255, 0.30);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
 }
 
 /* Positionera labeln rakt ovanför markercentrum */
