@@ -31,6 +31,29 @@ const PRODUCT_COLORS = {
 };
 const DEFAULT_COLOR = "#FFFFFF";
 
+/* =========================================================
+   FÖRSENINGSFÄRGER (justera hex här efter smak)
+   - i tid / 1 min sen: GRÖN
+   - 2–5 min: GUL
+   - 6–10 min: ORANGE
+   - 11–15 min: RÖD
+   - 16+ min: VINRÖD
+   ========================================================= */
+const DELAY_COLOR_ON_TIME = "#22C55E"; // grön
+const DELAY_COLOR_YELLOW  = "#FACC15"; // gul
+const DELAY_COLOR_ORANGE  = "#F97316"; // orange
+const DELAY_COLOR_RED     = "#EF4444"; // röd
+const DELAY_COLOR_MAROON  = "#7F1D1D"; // vinröd
+
+function delayBucketColor(mins) {
+  // mins kan vara negativ/0 (tidig/i tid)
+  if (mins <= 1) return DELAY_COLOR_ON_TIME;
+  if (mins <= 5) return DELAY_COLOR_YELLOW;
+  if (mins <= 10) return DELAY_COLOR_ORANGE;
+  if (mins <= 15) return DELAY_COLOR_RED;
+  return DELAY_COLOR_MAROON;
+}
+
 // ===== KARTA =====
 const map = L.map("map", { zoomControl: true }).setView([59.33, 18.06], 6);
 const baseHot = L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
@@ -41,7 +64,6 @@ const baseHot = L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.p
 }).addTo(map);
 
 // ===== RAIL OVERLAY (OpenRailwayMap) =====
-// Lägg järnvägar under tågen (markers ligger över p.g.a. högre z-index)
 map.createPane("railsPane");
 map.getPane("railsPane").style.zIndex = 350;
 
@@ -70,7 +92,7 @@ function makeUserIcon() {
 }
 
 function ensureUserLocation() {
-  if (userWatchId !== null) return; // redan igång
+  if (userWatchId !== null) return;
   if (!("geolocation" in navigator)) {
     console.warn("Geolocation stöds inte i den här webbläsaren.");
     return;
@@ -109,7 +131,6 @@ function ensureUserLocation() {
     },
     (err) => {
       console.warn("GPS-fel:", err?.message || err);
-      // Om permission nekas osv – lämna knappen så användaren kan försöka igen.
     },
     {
       enableHighAccuracy: true,
@@ -119,7 +140,6 @@ function ensureUserLocation() {
   );
 }
 
-// En “Google Maps”-liknande locate-knapp (user gesture hjälper i många browsers)
 const LocateControl = L.Control.extend({
   options: { position: "bottomright" },
   onAdd() {
@@ -139,7 +159,6 @@ const LocateControl = L.Control.extend({
         const ll = userMarker.getLatLng();
         map.setView(ll, Math.max(map.getZoom(), 14), { animate: true });
       } else {
-        // Om vi inte har en fix ännu: försök med getCurrentPosition för snabb första fix
         if ("geolocation" in navigator) {
           navigator.geolocation.getCurrentPosition(
             (pos) => {
@@ -152,11 +171,9 @@ const LocateControl = L.Control.extend({
         }
       }
 
-      // Visuell state
       btn.classList.add("is-following");
     });
 
-    // Sluta följa om användaren själv rör kartan (Google Maps-beteende)
     const stopFollow = () => {
       if (!followUser) return;
       followUser = false;
@@ -170,14 +187,12 @@ const LocateControl = L.Control.extend({
 });
 map.addControl(new LocateControl());
 
-// Försök starta direkt också (funkar fint på GitHub Pages/HTTPS)
 ensureUserLocation();
 
 // ===== STATE =====
-const markers = new Map(); // key -> marker
-const trainDataByKey = new Map(); // key -> train
+const markers = new Map();
+const trainDataByKey = new Map();
 
-// ===== LABEL SYSTEM (SL-style) =====
 let hoverKey = null;
 let hoverLabelMarker = null;
 
@@ -188,9 +203,8 @@ let isPointerOverTrain = false;
 
 const LABEL_OFFSET_Y_PX = 18;
 
-// Cache: senaste kända product/to per tågnr (för att undvika null-flimmer)
-const lastKnownByTrainNo = new Map(); // trainNo -> { product, to, tsMs }
-const LAST_KNOWN_TTL_MS = 30 * 60 * 1000; // 30 min
+const lastKnownByTrainNo = new Map();
+const LAST_KNOWN_TTL_MS = 30 * 60 * 1000;
 
 function isMissing(v) {
   return v === null || v === undefined || v === "" || v === "null";
@@ -306,10 +320,6 @@ function bestTextColor(bgHex) {
   return L > 0.55 ? "#0B1220" : "#ffffff";
 }
 
-function clamp(x, a, b) {
-  return Math.max(a, Math.min(b, x));
-}
-
 function parseHHMM(s) {
   if (!s || typeof s !== "string") return null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
@@ -334,24 +344,23 @@ function delayMinutes(t) {
   return d;
 }
 
-// Färg: grön (<=1 min) -> ... -> röd (15+ min)
-function delayColor(mins) {
-  if (mins === null || mins === undefined) return null;
-
-  if (mins <= 1) return "hsl(120 90% 45%)"; // grön
-
-  const t = clamp((mins - 1) / (15 - 1), 0, 1); // 0..1
-  const hue = 120 * (1 - t); // 120 -> 0
-  return `hsl(${hue.toFixed(1)} 90% 50%)`;
-}
-
-function delayBadgeHtml(t) {
+/**
+ * Indikator:
+ * - Om atal/tal ej går att tolka => visa inget
+ * - <= 1 min sen (inkl tidig/i tid) => grön cirkel
+ * - >= 2 min sen => "+N" badge med låsta färger
+ */
+function delayIndicatorHtml(t) {
   const dmin = delayMinutes(t);
-  if (dmin === null) return "";      // visa inget om vi inte kan tolka
-  if (dmin < 2) return "";           // visa från och med 2 min försening
+  if (dmin === null) return "";
 
-  const bg = delayColor(dmin);
-  return `<span class="delayBadge" style="background:${bg}" title="${dmin} min sen">+${dmin}</span>`;
+  if (dmin <= 1) {
+    const c = DELAY_COLOR_ON_TIME;
+    return `<span class="statusDot" style="background:${c}" title="I tid"></span>`;
+  }
+
+  const c = delayBucketColor(dmin);
+  return `<span class="delayBadge" style="background:${c}" title="${dmin} min sen">+${dmin}</span>`;
 }
 
 // Bearing offset
@@ -420,13 +429,13 @@ function productLogoPath(product) {
 function chipHtml(t, color) {
   const logo = productLogoPath(t.product);
   const textColor = bestTextColor(color);
-  const badge = delayBadgeHtml(t);
+  const indicator = delayIndicatorHtml(t);
 
   return `
     <div class="chip" style="background:${color}; color:${textColor};">
       <img class="logo" src="${logo}" alt="${t.product}" onerror="this.style.display='none'">
       <span>${formatChipText(t)}</span>
-      ${badge}
+      ${indicator}
     </div>
   `;
 }
@@ -613,8 +622,7 @@ function normalizeProduct(rawProduct) {
   return rawProduct;
 }
 
-// ===== CAP (behåller tidigare beteende: visa aldrig >200 km/h) =====
-const SPEED_CAP = 300;
+const SPEED_CAP = 200;
 
 function normalizeTrain(tIn) {
   const t = { ...tIn };
@@ -627,16 +635,13 @@ function normalizeTrain(tIn) {
     t.to = n % 2 === 1 ? "Stockholm C" : "Arlanda";
   }
 
-  // SL Pendeltåg: "1 km/h" default -> behandla som null
   if (t.product === "SL Pendeltåg" && t.speed === 1) {
     t.speed = null;
   }
 
-  // Snygga upp "null" (kan komma och gå från API)
   if (isMissing(t.product)) t.product = null;
   if (isMissing(t.to)) t.to = null;
 
-  // Fyll i från senaste kända om fält går till null
   const trainNoKey = String(t.trainNo ?? "");
   const now = Date.now();
   if (trainNoKey) {
@@ -660,12 +665,10 @@ function normalizeTrain(tIn) {
     }
   }
 
-  // clamp även “riktig” speed (så du aldrig visar >200)
   if (t.speed !== null && t.speed !== undefined && Number.isFinite(Number(t.speed))) {
     t.speed = Math.min(Number(t.speed), SPEED_CAP);
   }
 
-  // Ingen hastighetsestimering
   t._speedEstimated = false;
 
   return t;
