@@ -306,6 +306,54 @@ function bestTextColor(bgHex) {
   return L > 0.55 ? "#0B1220" : "#ffffff";
 }
 
+function clamp(x, a, b) {
+  return Math.max(a, Math.min(b, x));
+}
+
+function parseHHMM(s) {
+  if (!s || typeof s !== "string") return null;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  return hh * 60 + mm;
+}
+
+function delayMinutes(t) {
+  const sched = parseHHMM(t.atal);
+  const actual = parseHHMM(t.tal);
+  if (sched === null || actual === null) return null;
+
+  let d = actual - sched;
+
+  // Midnattshantering (om differensen är "orimligt stor")
+  if (d < -720) d += 1440;
+  if (d > 720) d -= 1440;
+
+  return d;
+}
+
+// Färg: grön (<=1 min) -> ... -> röd (15+ min)
+function delayColor(mins) {
+  if (mins === null || mins === undefined) return null;
+
+  if (mins <= 1) return "hsl(120 90% 45%)"; // grön
+
+  const t = clamp((mins - 1) / (15 - 1), 0, 1); // 0..1
+  const hue = 120 * (1 - t); // 120 -> 0
+  return `hsl(${hue.toFixed(1)} 90% 50%)`;
+}
+
+function delayBadgeHtml(t) {
+  const dmin = delayMinutes(t);
+  if (dmin === null) return "";      // visa inget om vi inte kan tolka
+  if (dmin < 2) return "";           // visa från och med 2 min försening
+
+  const bg = delayColor(dmin);
+  return `<span class="delayBadge" style="background:${bg}" title="${dmin} min sen">+${dmin}</span>`;
+}
+
 // Bearing offset
 const BEARING_OFFSET_DEG = -45;
 
@@ -372,10 +420,13 @@ function productLogoPath(product) {
 function chipHtml(t, color) {
   const logo = productLogoPath(t.product);
   const textColor = bestTextColor(color);
+  const badge = delayBadgeHtml(t);
+
   return `
     <div class="chip" style="background:${color}; color:${textColor};">
       <img class="logo" src="${logo}" alt="${t.product}" onerror="this.style.display='none'">
       <span>${formatChipText(t)}</span>
+      ${badge}
     </div>
   `;
 }
@@ -563,7 +614,7 @@ function normalizeProduct(rawProduct) {
 }
 
 // ===== CAP (behåller tidigare beteende: visa aldrig >200 km/h) =====
-const SPEED_CAP = 200;
+const SPEED_CAP = 300;
 
 function normalizeTrain(tIn) {
   const t = { ...tIn };
