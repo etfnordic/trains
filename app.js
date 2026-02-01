@@ -317,7 +317,7 @@ function bestTextColor(bgHex) {
     return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
   });
   const L = 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
-  return L > 0.55 ? "#0B1220" : "#ffffff";
+  return L > 0.45 ? "#0B1220" : "#ffffff";
 }
 
 function formatDelayHM(mins) {
