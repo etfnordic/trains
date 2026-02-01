@@ -320,6 +320,16 @@ function bestTextColor(bgHex) {
   return L > 0.55 ? "#0B1220" : "#ffffff";
 }
 
+function formatDelayHM(mins) {
+  const sign = mins >= 0 ? "+" : "−";
+  const m = Math.abs(mins);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+
+  if (h > 0) return `${sign}${h}:${String(mm).padStart(2, "0")}`;
+  return `${sign}${mm}`;
+}
+
 function parseHHMM(s) {
   if (!s || typeof s !== "string") return null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
@@ -332,7 +342,11 @@ function parseHHMM(s) {
 
 function delayMinutes(t) {
   const sched = parseHHMM(t.atal);
-  const actual = parseHHMM(t.tal);
+
+  // använd tal om den finns, annars etal som fallback
+  const actualStr = !isMissing(t.tal) ? t.tal : t.etal;
+  const actual = parseHHMM(actualStr);
+
   if (sched === null || actual === null) return null;
 
   let d = actual - sched;
@@ -360,7 +374,7 @@ function delayIndicatorHtml(t) {
   }
 
   const c = delayBucketColor(dmin);
-  return `<span class="delayBadge" style="background:${c}" title="${dmin} min sen">+${dmin}</span>`;
+  return `<span class="delayBadge" style="background:${c}" title="${dmin} min sen">${formatDelayHM(dmin)}</span>`;
 }
 
 // Bearing offset
