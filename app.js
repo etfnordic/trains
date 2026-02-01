@@ -440,7 +440,7 @@ function chipHtml(t, color) {
   `;
 }
 
-// ===== Label icon (SL-style) =====
+// Label
 function makeLabelDivIcon(t, color, pinned) {
   const wrapper = `
     <div class="trainLabelPos" style="--label-gap:${LABEL_OFFSET_Y_PX}px;">
@@ -622,7 +622,7 @@ function normalizeProduct(rawProduct) {
   return rawProduct;
 }
 
-const SPEED_CAP = 200;
+const SPEED_CAP = 250;
 
 function normalizeTrain(tIn) {
   const t = { ...tIn };
