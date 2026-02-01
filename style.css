@@ -160,12 +160,12 @@ body {
   justify-content: center;
   flex: 0 0 auto;
   margin-left: 2px;
-  padding: 4px 8px;
+  padding: 3px 7px;
   border-radius: 999px;
 
   /* Mer lik texten i chipet (mindre "tung") */
   font:
-    600 12px/1 system-ui,
+    600 10px/1 system-ui,
     -apple-system,
     Segoe UI,
     Roboto,
