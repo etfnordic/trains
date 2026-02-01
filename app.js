@@ -48,9 +48,9 @@ const DELAY_COLOR_MAROON  = "#7F1D1D"; // vinröd
 function delayBucketColor(mins) {
   // mins kan vara negativ/0 (tidig/i tid)
   if (mins <= 1) return DELAY_COLOR_ON_TIME;
-  if (mins <= 5) return DELAY_COLOR_YELLOW;
-  if (mins <= 10) return DELAY_COLOR_ORANGE;
-  if (mins <= 15) return DELAY_COLOR_RED;
+  if (mins <= 4) return DELAY_COLOR_YELLOW;
+  if (mins <= 9) return DELAY_COLOR_ORANGE;
+  if (mins <= 14) return DELAY_COLOR_RED;
   return DELAY_COLOR_MAROON;
 }
 
